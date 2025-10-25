@@ -1,6 +1,8 @@
 import pandas as pd
 from datetime import datetime, timedelta
 import calendar
+from skyfield.api import load
+import numpy as np
 from events.persian_events import persian_events, persian_holidays, hijri_official_holidays
 from events.gregorian_events import gregorian_events_en, gregorian_events_fa, gregorian_holidays
 from events.hijri_events import hijri_events, hijri_events_en, hijri_holidays
@@ -125,31 +127,49 @@ def jalali_to_gregorian(jy, jm, jd):
         if i == 12 or days < gd_m[i] + (1 if i+1 > 2 and leap else 0):
             return gy, i, days - v + 1
 
-# میلادی به عدد جولیَن
-def gregorian_to_jd(gy, gm, gd):
-    a = (14 - gm) // 12
-    y = gy + 4800 - a
-    m = gm + 12 * a - 3
-    jd = gd + ((153 * m + 2) // 5) + 365 * y + (y // 4) - (y // 100) + (y // 400) - 32045
-    return jd
+# داده‌های نجومی
+ts = load.timescale()
+planets = load('de421.bsp')
+earth, moon, sun = planets['earth'], planets['moon'], planets['sun']
 
-# عدد جولیَن به قمری (الگوریتم حسابی دقیق)
-def jd_to_hijri_tabular(jd):
-    jd = int(jd)
-    l = jd - 1948440 + 10632
-    n = (l - 1) // 10631
-    l = l - 10631 * n + 354
-    j = ((10985 - l) // 5316) * ((50 * l) // 17719) + (l // 5670) * ((43 * l) // 15238)
-    l = l - ((30 - j) // 15) * ((17719 * j) // 50) - (j // 16) * ((15238 * j) // 43) + 29
-    m = (24 * l) // 709
-    d = l - (709 * m) // 24
-    y = 30 * n + j - 30
-    return y, m, d
+# نام ماه‌های قمری به فارسی
+HIJRI_MONTHS = [
+    "محرم", "صفر", "ربیع‌الاول", "ربیع‌الثانی", "جمادی‌الاول",
+    "جمادی‌الثانی", "رجب", "شعبان", "رمضان", "شوال",
+    "ذی‌قعده", "ذی‌حجه"
+]
 
-# ترکیب نهایی: میلادی → قمری
+def gregorian_to_hijri_astronomical(year, month, day):
+    """Convert Gregorian date to Hijri using astronomical calculations"""
+    # زمان ورودی
+    t = ts.utc(year, month, day)
+    
+    # --- موقعیت‌های سماوی ---
+    e = earth.at(t)
+    moon_lon = e.observe(moon).apparent().ecliptic_latlon()[1].degrees
+    sun_lon  = e.observe(sun).apparent().ecliptic_latlon()[1].degrees
+
+    # --- زاویه جدایی ماه و خورشید (درجه) ---
+    elongation = (moon_lon - sun_lon) % 360
+
+    # --- سن ماه (روزهای گذشته از مقارنه) ---
+    moon_age = (elongation / 360.0) * 29.53058867
+    day_in_hijri_month = int(moon_age)
+    if day_in_hijri_month == 0:
+        day_in_hijri_month = 30  # برگشت به ماه قبل
+
+    # --- تخمین ماه و سال قمری ---
+    # اختلاف بین تاریخ میلادی و مبدأ قمری (16 ژوئیه 622 میلادی)
+    jd_days = (t.utc_datetime() - ts.utc(622, 7, 16).utc_datetime()).days
+    hijri_months_passed = int(jd_days / 29.53058867)
+    hijri_year = 1 + hijri_months_passed // 12
+    hijri_month = hijri_months_passed % 12
+
+    return hijri_year, hijri_month + 1, day_in_hijri_month
+
+# استفاده از فرمول نجومی
 def gregorian_to_hijri(gy, gm, gd):
-    jd = gregorian_to_jd(gy, gm, gd)
-    return jd_to_hijri_tabular(jd)
+    return gregorian_to_hijri_astronomical(gy, gm, gd)
 
 def is_hijri_leap(year):
     """Check if Hijri year is leap year"""
